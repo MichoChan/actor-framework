@@ -589,16 +589,33 @@ CAF_TEST(move_only_argument) {
   };
   auto f = make_function_view(system.spawn(impl, std::move(uptr)));
   CAF_CHECK_EQUAL(to_string(f(1.f)), "(42)");
-  /*
-  auto testee = system.spawn(f, std::move(uptr));
-  scoped_actor self{system};
-  self->request(testee, infinite, 1.f).receive(
-    [](int i) {
-      CAF_CHECK_EQUAL(i, 42);
-    },
-    ERROR_HANDLER
-  );
-  */
 }
 
 CAF_TEST_FIXTURE_SCOPE_END()
+
+CAF_TEST(manual_timeout_dispatching) {
+  actor_system_config cfg;
+  cfg.scheduler_policy = atom("testing");
+  actor_system sys{cfg};
+  auto& sched = dynamic_cast<scheduler::test_coordinator&>(sys.scheduler());
+  bool called = false;
+  scoped_actor self{sys};
+  CAF_CHECK(sched.jobs.empty());
+  CAF_CHECK(sched.delayed_messages.empty());
+  auto testee = self->spawn([&](event_based_actor* self) -> behavior {
+    return {
+      [&,self](ok_atom) {
+        called = true;
+      }
+    };
+  });
+  self->delayed_send(testee, std::chrono::minutes(60), ok_atom::value);
+  sched.dispatch();
+  CAF_CHECK_EQUAL(sched.jobs.size(), 1u);
+  CAF_CHECK_EQUAL(sched.next_job<event_based_actor>().name(),
+                  std::string{"scheduled_actor"});
+  sched.run();
+  CAF_CHECK(called);
+  CAF_CHECK(sched.jobs.empty());
+  CAF_CHECK(sched.delayed_messages.empty());
+}
