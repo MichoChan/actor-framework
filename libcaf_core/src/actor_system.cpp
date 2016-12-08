@@ -28,6 +28,7 @@
 
 #include "caf/policy/work_sharing.hpp"
 #include "caf/policy/work_stealing.hpp"
+#include "caf/policy/numa_aware_work_stealing.hpp"
 
 #include "caf/scheduler/coordinator.hpp"
 #include "caf/scheduler/abstract_coordinator.hpp"
@@ -200,6 +201,7 @@ actor_system::actor_system(actor_system_config& cfg)
   auto& sched = modules_[module::scheduler];
   using share = scheduler::coordinator<policy::work_sharing>;
   using steal = scheduler::coordinator<policy::work_stealing>;
+  using numa_steal = scheduler::coordinator<policy::numa_aware_work_stealing>;
   using profiled_share = scheduler::profiled_coordinator<policy::work_sharing>;
   using profiled_steal = scheduler::profiled_coordinator<policy::work_stealing>;
   // set scheduler only if not explicitly loaded by user
@@ -207,13 +209,17 @@ actor_system::actor_system(actor_system_config& cfg)
     enum sched_conf {
       stealing          = 0x0001,
       sharing           = 0x0002,
+      numa_stealing     = 0x0004,
       profiled          = 0x0100,
       profiled_stealing = 0x0101,
       profiled_sharing  = 0x0102
     };
     sched_conf sc = stealing;
+
     if (cfg.scheduler_policy == atom("sharing"))
       sc = sharing;
+    else if (cfg.scheduler_policy == atom("numa-steal"))
+      sc = numa_stealing;
     else if (cfg.scheduler_policy != atom("stealing"))
       std::cerr << "[WARNING] " << deep_to_string(cfg.scheduler_policy)
                 << " is an unrecognized scheduler pollicy, "
@@ -227,6 +233,9 @@ actor_system::actor_system(actor_system_config& cfg)
         break;
       case sharing:
         sched.reset(new share(*this));
+        break;
+      case numa_stealing:
+        sched.reset(new numa_steal(*this));
         break;
       case profiled_stealing:
         sched.reset(new profiled_steal(*this));

@@ -40,6 +40,7 @@ public:
 
   ~work_sharing();
 
+  template <class Worker>
   struct coordinator_data {
     inline explicit coordinator_data(scheduler::abstract_coordinator*) {
       // nop
@@ -48,6 +49,7 @@ public:
     queue_type queue;
     std::mutex lock;
     std::condition_variable cv;
+    std::vector<std::unique_ptr<Worker>> workers;
   };
 
   struct worker_data {
@@ -55,6 +57,22 @@ public:
       // nop
     }
   };
+
+  /// Creates a new worker.
+  template <class Coordinator, class Worker>
+  std::unique_ptr<Worker> create_worker(Coordinator* self,
+                                        size_t worker_id,
+                                        size_t throughput) {
+    std::unique_ptr<Worker> res(
+      new Worker(worker_id, self , throughput));
+    return res;
+  }
+
+  /// Initalize worker thread.
+  template <class Worker>
+  void init_worker_thread(Worker*) {
+    // nop 
+  }
 
   template <class Coordinator>
   void enqueue(Coordinator* self, resumable* job) {

@@ -69,6 +69,7 @@ set (LIBCAF_CORE_SRCS
      src/message_handler.cpp
      src/message_view.cpp
      src/node_id.cpp
+     src/numa_aware_work_stealing.cpp
      src/parse_ini.cpp
      src/private_thread.cpp
      src/ref_counted.cpp

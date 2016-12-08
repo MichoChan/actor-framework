@@ -110,6 +110,7 @@ private:
   void run() {
     CAF_SET_LOGGER_SYS(&system());
     CAF_LOG_TRACE(CAF_ARG(id_));
+    policy_.init_worker_thread(this);
     // scheduling loop
     for (;;) {
       auto job = policy_.dequeue(this);
