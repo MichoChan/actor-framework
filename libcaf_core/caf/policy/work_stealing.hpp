@@ -84,6 +84,7 @@ public:
   }
 
   // Holds job job queue of a worker and a random number generator.
+  template <class Worker>
   struct worker_data {
     inline explicit worker_data(scheduler::abstract_coordinator* p)
         : rengine(std::random_device{}())
@@ -103,14 +104,14 @@ public:
     std::vector<poll_strategy> strategies;
   };
 
-  /// Creates a new worker.
+  // Create x workers.
   template <class Coordinator, class Worker>
-  std::unique_ptr<Worker> create_worker(Coordinator* self,
-                                        size_t worker_id,
-                                        size_t throughput) {
-    std::unique_ptr<Worker> res(
-      new Worker(worker_id, self, throughput));
-    return res;
+  void create_workers(Coordinator* self, size_t num_workers,
+                                         size_t throughput) {
+    for (size_t i = 0; i < num_workers; ++i) {
+      std::unique_ptr<Worker> worker(new Worker(i, self, throughput));
+      d(self).workers.emplace_back(std::move(worker));
+    }    
   }
 
   /// Initalize worker thread.
@@ -129,15 +130,16 @@ public:
     }
     // roll the dice to pick a victim other than ourselves
     auto victim = d(self).uniform(d(self).rengine);
+    // in this case the worker id is similar to the worker index
     if (victim == self->id())
       victim = p->num_workers() - 1;
     // steal oldest element from the victim's queue
-    return d(p->worker_by_id(victim)).queue.take_tail();
+    return d(p->worker_by_idx(victim)).queue.take_tail();
   }
 
   template <class Coordinator>
   void central_enqueue(Coordinator* self, resumable* job) {
-    auto w = self->worker_by_id(d(self).next_worker++ % self->num_workers());
+    auto w = self->worker_by_idx(d(self).next_worker++ % self->num_workers());
     w->external_enqueue(job);
   }
 

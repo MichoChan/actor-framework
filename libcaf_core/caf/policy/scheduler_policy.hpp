@@ -39,14 +39,15 @@ public:
   };
 
   /// Policy-specific data fields for the worker.
+  template <class Worker>
   struct worker_data {
     explicit worker_data(scheduler::abstract_coordinator*);
   };
 
-  /// Creates a new worker.
+  /// Create x workers.
   template <class Coordinator, class Worker>
-  std::unique_ptr<Worker> create_worker(Coordinator* self, size_t worker_id,
-                                        size_t throughput);
+  void create_workers(Coordinator* self, size_t num_workers,
+                                         size_t throughput);
 
   /// Initalize worker thread.
   template <class Worker>

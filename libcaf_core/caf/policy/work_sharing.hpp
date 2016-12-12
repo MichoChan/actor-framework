@@ -52,20 +52,21 @@ public:
     std::vector<std::unique_ptr<Worker>> workers;
   };
 
+  template <class Worker>
   struct worker_data {
     inline explicit worker_data(scheduler::abstract_coordinator*) {
       // nop
     }
   };
 
-  /// Creates a new worker.
+  // Create x workers.
   template <class Coordinator, class Worker>
-  std::unique_ptr<Worker> create_worker(Coordinator* self,
-                                        size_t worker_id,
-                                        size_t throughput) {
-    std::unique_ptr<Worker> res(
-      new Worker(worker_id, self , throughput));
-    return res;
+  void create_workers(Coordinator* self, size_t num_workers,
+                                         size_t throughput) {
+    for (size_t i = 0; i < num_workers; ++i) {
+      std::unique_ptr<Worker> worker(new Worker(i, self, throughput));
+      d(self).workers.emplace_back(std::move(worker));
+    }    
   }
 
   /// Initalize worker thread.

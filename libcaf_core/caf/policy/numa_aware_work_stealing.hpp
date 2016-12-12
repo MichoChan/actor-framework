@@ -71,7 +71,7 @@ public:
   using hwloc_bitmap_wrapper =
     std::unique_ptr<hwloc_bitmap_s, hwloc_bitmap_free_wrapper>;
 
-  hwloc_bitmap_wrapper hwloc_bitmap_make_wrapper() const {
+  static hwloc_bitmap_wrapper hwloc_bitmap_make_wrapper() {
     return hwloc_bitmap_wrapper(hwloc_bitmap_alloc());
   }
 
@@ -79,7 +79,6 @@ public:
   using node_id_t = int;
   using pu_set_t = hwloc_bitmap_wrapper;
   using node_set_t = hwloc_bitmap_wrapper;
-  using pu_matrix_t = std::vector<pu_set_t>;
 
   template <class Worker>
   struct coordinator_data {
@@ -91,52 +90,124 @@ public:
       topo.reset(raw_topo);
       res = hwloc_topology_load(topo.get());
       CALL_CAF_CRITICAL(res == -1, "hwloc_topology_load() failed");
-      pu_depth = hwloc_get_type_depth(topo.get(), HWLOC_OBJ_PU);
-      CALL_CAF_CRITICAL(pu_depth == HWLOC_TYPE_DEPTH_UNKNOWN,
-                        "Type HWLOC_OBJ_PU not found");
-      num_pus = hwloc_get_nbobjs_by_depth(topo.get(), pu_depth);
-      CALL_CAF_CRITICAL(num_pus == 0, "no PUs found");
       next_worker = 0;
     }
     topo_ptr topo;
-    int pu_depth;
-    size_t num_pus;
     std::vector<std::unique_ptr<Worker, worker_deleter<Worker>>> workers;
+    std::map<pu_id_t, Worker*> worker_id_map;
     // used by central enqueue to balance new jobs between workers with round
     // robin strategy
     std::atomic<size_t> next_worker; 
   };
 
+  template <class Worker>
   struct worker_data {
+    using worker_matrix_t = std::vector<std::vector<Worker*>>;
+
     inline explicit worker_data(scheduler::abstract_coordinator* p)
         :  strategies(get_poll_strategies(p)) {
+    }
 
+    worker_matrix_t init_worker_matrix(Worker* self,
+                                       const pu_set_t& current_pu_id_set) {
+      auto& cdata = d(self->parent());
+      auto& topo = cdata.topo;
+      worker_matrix_t result_matrix;
+      // Distance matrix of NUMA nodes.
+      // It is possible to request the distance matrix on PU level,
+      // which would be a better match for our usecase
+      // but on all tested hardware it returned a nullptr, maybe future
+      // work?
+      auto distance_matrix =
+        hwloc_get_whole_distance_matrix_by_type(topo.get(), HWLOC_OBJ_NUMANODE);
+      CALL_CAF_CRITICAL(!distance_matrix || !distance_matrix->latency,
+                        "NUMA distance matrix not available");
+      auto current_node_set = hwloc_bitmap_make_wrapper();
+      hwloc_cpuset_to_nodeset(topo.get(), current_pu_id_set.get(),
+                              current_node_set.get());
+      CALL_CAF_CRITICAL(hwloc_bitmap_iszero(current_node_set.get()),
+                        "Current NUMA node_set is unknown");
+      node_id_t current_node_id = hwloc_bitmap_first(current_node_set.get());
+      node_id_t num_of_dist_objs = distance_matrix->nbobjs;
+      // relvant line for the current NUMA node in distance matrix
+      float* dist_pointer =
+        &distance_matrix->latency[num_of_dist_objs * current_node_id];
+      std::map<float, pu_set_t> dist_map;
+      // iterate over all NUMA nodes and classify them in distance levels
+      // regarding
+      // to the current NUMA node
+      for (node_id_t x = 0; x < num_of_dist_objs; ++x) {
+        node_set_t tmp_node_set = hwloc_bitmap_make_wrapper();
+        hwloc_bitmap_set(tmp_node_set.get(), x);
+        auto tmp_pu_set = hwloc_bitmap_make_wrapper();
+        hwloc_cpuset_from_nodeset(topo.get(), tmp_pu_set.get(),
+                                  tmp_node_set.get());
+        // you cannot steal from yourself
+        if (x == current_node_id) {
+          hwloc_bitmap_andnot(tmp_pu_set.get(), tmp_pu_set.get(),
+                              current_pu_id_set.get());
+        }
+        auto dist_it = dist_map.find(dist_pointer[x]);
+        if (dist_it == dist_map.end())
+          // create a new distane level
+          dist_map.insert(
+            std::make_pair(dist_pointer[x], std::move(tmp_pu_set)));
+        else
+          // add PUs to an available distance level
+          hwloc_bitmap_or(dist_it->second.get(), dist_it->second.get(),
+                          tmp_pu_set.get());
+      }
+      // return PU matrix sorted by its distance
+      result_matrix.reserve(dist_map.size());
+      for (auto& pu_set_it : dist_map) {
+        std::vector<Worker*> current_lvl;
+        auto pu_set = pu_set_it.second.get();
+        for (pu_id_t pu_id = hwloc_bitmap_first(pu_set); pu_id != -1;
+             pu_id = hwloc_bitmap_next(pu_set, pu_id)) {
+          auto worker_id_it = cdata.worker_id_map.find(pu_id);
+          CAF_ASSERT(worker_id_it == cdata.worker_id_map.end());
+          current_lvl.emplace_back(worker_id_it->second);
+        }
+        result_matrix.emplace_back(std::move(current_lvl));
+      }
+      return result_matrix;
     }
     // This queue is exposed to other workers that may attempt to steal jobs
     // from it and the central scheduling unit can push new jobs to the queue.
     queue_type queue;
-    pu_matrix_t pu_dist_matrix;
+    worker_matrix_t worker_matrix;
     std::vector<poll_strategy> strategies;
   };
 
-  /// Creates a new worker.
+  /// Create x workers.
   template <class Coordinator, class Worker>
-  std::unique_ptr<Worker, worker_deleter<Worker>>
-  create_worker(Coordinator* self, size_t worker_id, size_t throughput) {
+  void create_workers(Coordinator* self, size_t num_workers,
+                                         size_t throughput) {
     auto& cdata = d(self);
     auto& topo = cdata.topo;
-    CALL_CAF_CRITICAL(cdata.num_pus - 1 < worker_id,
-                      "worker_id higher than the number of PUs");
+    auto allowed_pus = hwloc_topology_get_allowed_cpuset(topo.get());
+    size_t num_allowed_pus = hwloc_bitmap_weight(allowed_pus);
+    CALL_CAF_CRITICAL(num_allowed_pus < num_workers,
+                      "less PUs than worker");
+    cdata.workers.reserve(num_allowed_pus);
     auto pu_set = hwloc_bitmap_make_wrapper();
-    hwloc_bitmap_set(pu_set.get(), worker_id);
-    auto node_set = get_node_set(topo, pu_set);
-    auto ptr =
-      hwloc_alloc_membind_nodeset(topo.get(), sizeof(Worker), node_set.get(),
-                                  HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
-    std::unique_ptr<Worker, worker_deleter<Worker>> res(
-      new (ptr) Worker(worker_id, self, throughput),
-      worker_deleter<Worker>(topo));
-    return res;
+    auto node_set = hwloc_bitmap_make_wrapper();
+    auto pu_id = hwloc_bitmap_first(allowed_pus);
+    size_t worker_count = 0;
+    while (pu_id != -1 && worker_count < num_workers) {
+      hwloc_bitmap_only(pu_set.get(), pu_id);
+      hwloc_cpuset_to_nodeset(topo.get(), pu_set.get(), node_set.get());
+      auto ptr =
+        hwloc_alloc_membind_nodeset(topo.get(), sizeof(Worker), node_set.get(),
+                                    HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
+      std::unique_ptr<Worker, worker_deleter<Worker>> worker(
+        new (ptr) Worker(pu_id, self, throughput),
+        worker_deleter<Worker>(topo));
+      cdata.worker_id_map.insert(std::make_pair(pu_id, worker.get()));
+      cdata.workers.emplace_back(std::move(worker));
+      pu_id = hwloc_bitmap_next(allowed_pus, pu_id);
+      worker_count++;
+    }
   }
 
   /// Initalize worker thread.
@@ -149,36 +220,36 @@ public:
     auto res = hwloc_set_cpubind(cdata.topo.get(), pu_set.get(),
                           HWLOC_CPUBIND_THREAD | HWLOC_CPUBIND_NOMEMBIND);
     CALL_CAF_CRITICAL(res == -1, "hwloc_set_cpubind() failed");
-    wdata.pu_dist_matrix = get_pu_matrix(cdata.topo, pu_set);
+    wdata.worker_matrix = wdata.init_worker_matrix(self, pu_set);
   }
 
   template <class Worker>
-  resumable* try_steal(Worker* self, size_t& current_steal_lvl,
-                       pu_id_t& last_pu_id) {
-    auto p = self->parent();
-    pu_id_t num_workers = p->num_workers();
+  resumable* try_steal(Worker* self, size_t& scheduler_lvl_idx,
+                       size_t& worker_idx) {
+    //auto p = self->parent();
+    auto& wdata = d(self);
+    auto& cdata = d(self->parent());
+    pu_id_t num_workers = cdata.workers.size();
     if (num_workers < 2) {
       // you can't steal from yourself, can you?
       return nullptr;
     }
-    auto& dmatrix = d(self).pu_dist_matrix;
+    auto& wmatrix = wdata.worker_matrix;
     // iterate over each distance level
-    while(current_steal_lvl < dmatrix.size()) {
-      auto& pu_set = dmatrix[current_steal_lvl];
-      // iterate over each pu_id in current distance level
-      for (last_pu_id = hwloc_bitmap_next(pu_set.get(), last_pu_id);
-           last_pu_id != -1;
-           last_pu_id = hwloc_bitmap_next(pu_set.get(), last_pu_id)) {
-        if (last_pu_id < num_workers)
-          return d(p->worker_by_id(last_pu_id)).queue.take_tail();
+    while(scheduler_lvl_idx < wmatrix.size()) {
+      auto& scheduler_lvl = wmatrix[scheduler_lvl_idx];
+      auto res = scheduler_lvl[worker_idx]->data().queue.take_tail();
+      ++worker_idx;
+      if (scheduler_lvl.size() <= worker_idx) {
+        ++scheduler_lvl_idx;
+        worker_idx = 0;
       }
-      ++current_steal_lvl;
-      last_pu_id = -1;
+      return res;
     }
     // tried to steal from all workes with no success
     // but never resign and start again from the beginning
-    current_steal_lvl = 0;
-    last_pu_id = -1;
+    scheduler_lvl_idx = 0;
+    worker_idx = 0;
     return nullptr;
   }
 
@@ -191,8 +262,8 @@ public:
     // on and poll every 10 ms; this strategy strives to minimize the
     // downside of "busy waiting", which still performs much better than a
     // "signalizing" implementation based on mutexes and conition variables
-    size_t current_steal_lvl = 0;
-    pu_id_t last_pu_id = -1;
+    size_t scheduler_lvl_idx = 0;
+    size_t worker_idx= 0;
     auto& strategies = d(self).strategies;
     resumable* job = nullptr;
     for (auto& strat : strategies) {
@@ -202,7 +273,7 @@ public:
           return job;
         // try to steal every X poll attempts
         if ((i % strat.steal_interval) == 0) {
-          job = try_steal(self, current_steal_lvl, last_pu_id);
+          job = try_steal(self, scheduler_lvl_idx, worker_idx);
           if (job)
             return job;
         }
@@ -215,11 +286,6 @@ public:
     return nullptr;
   }
 private:
-  pu_set_t get_pu_set(const topo_ptr& topo, const node_set_t& node_set) const;
-  node_set_t get_node_set(const topo_ptr& topo, const pu_set_t& pu_set) const;
-  pu_matrix_t get_pu_matrix(const topo_ptr& topo,
-                            const pu_set_t& current_pu_id_set) const;
-
   // -- debug stuff --
   friend std::ostream& operator <<(std::ostream& s, const hwloc_bitmap_wrapper& w);
 };

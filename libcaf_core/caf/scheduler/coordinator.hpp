@@ -46,7 +46,9 @@ public:
     // nop
   }
 
-  worker_type* worker_by_id(size_t x) {
+  /// return a worker by its vector index 
+  /// (this is not necessarily the id of the worker)
+  worker_type* worker_by_idx(size_t x) {
     return data_.workers[x].get();
   }
 
@@ -57,12 +59,7 @@ public:
 protected:
   void start() override {
     // initialize workers vector
-    auto num = num_workers();
-    data_.workers.reserve(num);
-    for (size_t i = 0; i < num; ++i)
-      data_.workers.emplace_back(
-        policy_.template create_worker<coordinator<Policy>, worker_type>(
-          this, i, max_throughput_));
+    policy_.template create_workers<coordinator<Policy>, worker_type>(this, num_workers(), max_throughput_);
     // start all workers now that all workers have been initialized
     for (auto& w : data_.workers)
       w->start();
@@ -102,7 +99,7 @@ protected:
     std::set<worker_type*> alive_workers;
     auto num = num_workers();
     for (size_t i = 0; i < num; ++i) {
-      alive_workers.insert(worker_by_id(i));
+      alive_workers.insert(worker_by_idx(i));
       sh.ref(); // make sure reference count is high enough
     }
     CAF_LOG_DEBUG("enqueue shutdown_helper into each worker");
