@@ -134,8 +134,7 @@ public:
         &distance_matrix->latency[num_of_dist_objs * current_node_id];
       std::map<float, pu_set_t> dist_map;
       // iterate over all NUMA nodes and classify them in distance levels
-      // regarding
-      // to the current NUMA node
+      // regarding to the current NUMA node
       for (node_id_t x = 0; x < num_of_dist_objs; ++x) {
         node_set_t tmp_node_set = hwloc_bitmap_make_wrapper();
         hwloc_bitmap_set(tmp_node_set.get(), x);
@@ -165,10 +164,15 @@ public:
         for (pu_id_t pu_id = hwloc_bitmap_first(pu_set); pu_id != -1;
              pu_id = hwloc_bitmap_next(pu_set, pu_id)) {
           auto worker_id_it = cdata.worker_id_map.find(pu_id);
-          CAF_ASSERT(worker_id_it == cdata.worker_id_map.end());
-          current_lvl.emplace_back(worker_id_it->second);
+          // if worker id is not found less worker than available PUs
+          // have been started
+          if (worker_id_it != cdata.worker_id_map.end())
+            current_lvl.emplace_back(worker_id_it->second);
         }
-        result_matrix.emplace_back(std::move(current_lvl));
+        // current_lvl can be empty if all pus of NUMA node are deactivated
+        if (!current_lvl.empty()) {
+          result_matrix.emplace_back(std::move(current_lvl));
+        }
       }
       return result_matrix;
     }
@@ -240,7 +244,7 @@ public:
       auto& scheduler_lvl = wmatrix[scheduler_lvl_idx];
       auto res = scheduler_lvl[worker_idx]->data().queue.take_tail();
       ++worker_idx;
-      if (scheduler_lvl.size() <= worker_idx) {
+      if (worker_idx >= scheduler_lvl.size()) {
         ++scheduler_lvl_idx;
         worker_idx = 0;
       }
