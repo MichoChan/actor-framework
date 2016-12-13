@@ -83,7 +83,7 @@ actor_system_config::actor_system_config()
       slave_mode(false),
       slave_mode_fun(nullptr) {
   // (1) hard-coded defaults
-  scheduler_policy = atom("stealing");
+  scheduler_policy = atom("numa-steal");
   scheduler_max_threads = std::max(std::thread::hardware_concurrency(),
                                    unsigned{4});
   scheduler_max_throughput = std::numeric_limits<size_t>::max();
