@@ -499,6 +499,7 @@ endmacro()
 
 # build core and I/O library
 add_caf_lib(core)
+set(CAF_CORE_LIBRARY libcaf_core_shared)
 add_optional_caf_lib(io)
 
 # build opencl library if not told otherwise and OpenCL package was found
