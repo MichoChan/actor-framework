@@ -176,7 +176,6 @@ actor_system::module::~module() {
   // nop
 }
 
-# include <chrono>
 actor_system::actor_system(actor_system_config& cfg)
     : ids_(0),
       types_(*this),
@@ -189,10 +188,6 @@ actor_system::actor_system(actor_system_config& cfg)
       detached(0),
       cfg_(cfg) {
   CAF_SET_LOGGER_SYS(this);
-  //measure actor system_config
-  auto start_time = std::chrono::steady_clock::now();
-
-  // end
   for (auto& f : cfg.module_factories) {
     auto mod_ptr = f(*this);
     modules_[mod_ptr->id()].reset(mod_ptr);
@@ -271,15 +266,6 @@ actor_system::actor_system(actor_system_config& cfg)
     if (mod)
       mod->start();
   groups_.start();
-
-  //measure time
-  auto end_time = std::chrono::steady_clock::now();
-  auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-  auto num_cores = cfg.scheduler_max_threads;
-  std::fstream fs;
-  fs.open("tmp_actor_system_time.txt", std::fstream::app);
-  fs << num_cores << " " << elapsed_time << std::endl;;
-  fs.close();
 }
 
 actor_system::~actor_system() {
