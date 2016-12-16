@@ -30,8 +30,6 @@
 
 #include "caf/policy/work_stealing.hpp"
 
-# include <chrono>
-# include <fstream>
 namespace caf {
 namespace policy {
 
@@ -106,8 +104,9 @@ public:
   struct worker_data {
     using worker_matrix_t = std::vector<std::vector<Worker*>>;
 
-    inline explicit worker_data(scheduler::abstract_coordinator* p)
+    explicit worker_data(scheduler::abstract_coordinator* p)
         :  strategies(get_poll_strategies(p)) {
+      // nop
     }
 
     worker_matrix_t init_worker_matrix(Worker* self,
@@ -226,9 +225,6 @@ public:
   /// Initalize worker thread.
   template <class Worker>
   void init_worker_thread(Worker* self) {
-    //measure actor system_config
-      auto start_time = std::chrono::high_resolution_clock::now();
-    // end
     auto& wdata = d(self);
     auto& cdata = d(self->parent());
     auto pu_set = hwloc_bitmap_make_wrapper();
@@ -237,17 +233,6 @@ public:
                           HWLOC_CPUBIND_THREAD | HWLOC_CPUBIND_NOMEMBIND);
     CALL_CAF_CRITICAL(res == -1, "hwloc_set_cpubind() failed");
     wdata.worker_matrix = wdata.init_worker_matrix(self, pu_set);
-
-    //measure time
-    if (self->id() == 0) {
-      auto end_time = std::chrono::high_resolution_clock::now();
-      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            end_time - start_time)
-                            .count();
-      auto num_cores = self->parent()->num_workers();
-      std::fstream fs{"tmp_actor_system_time.txt", std::fstream::app};
-      fs << num_cores << " " << elapsed_time << std::endl;
-    }
   }
 
   template <class Worker>

@@ -58,7 +58,7 @@ public:
   // The coordinator has only a counter for round-robin enqueue to its workers.
   template <class Worker>
   struct coordinator_data {
-    inline explicit coordinator_data(scheduler::abstract_coordinator*)
+    explicit coordinator_data(scheduler::abstract_coordinator*)
         : next_worker(0) {
       // nop
     }
@@ -86,7 +86,7 @@ public:
   // Holds job job queue of a worker and a random number generator.
   template <class Worker>
   struct worker_data {
-    inline explicit worker_data(scheduler::abstract_coordinator* p)
+    explicit worker_data(scheduler::abstract_coordinator* p)
         : rengine(std::random_device{}())
           // no need to worry about wrap-around; if `p->num_workers() < 2`,
           // `uniform` will not be used anyway
