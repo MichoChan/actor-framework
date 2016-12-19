@@ -237,8 +237,10 @@ message::cli_res message::extract_opts(std::vector<cli_arg> xs,
   bool skip_remainder = false;
   auto res = extract({
     [&](const std::string& arg) -> optional<skip_t> {
-      if (arg == "--") 
+      if (arg == "--") {
         skip_remainder = true;
+        return none;
+      }
       if (skip_remainder)
         return skip();
       if (arg.empty() || arg.front() != '-') {
