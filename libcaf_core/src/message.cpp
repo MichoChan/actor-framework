@@ -292,6 +292,12 @@ message::cli_res message::extract_opts(std::vector<cli_arg> xs,
     },
     [&](const std::string& arg1,
         const std::string& arg2) -> optional<skip_t> {
+      if (arg1 == "--") {
+        skip_remainder = true;
+        return skip();
+      }
+      if (skip_remainder)
+        return skip();
       if (arg1.size() < 2 || arg1[0] != '-' || arg1[1] == '-') {
         return skip();
       }
