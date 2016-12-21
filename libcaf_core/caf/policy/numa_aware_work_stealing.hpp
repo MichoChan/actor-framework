@@ -83,7 +83,7 @@ public:
   template <class Worker>
   struct coordinator_data {
     inline explicit coordinator_data(scheduler::abstract_coordinator*) {
-      bool res;
+      int res;
       hwloc_topology_t raw_topo;
       res = hwloc_topology_init(&raw_topo);
       CALL_CAF_CRITICAL(res == -1, "hwloc_topology_init() failed");
