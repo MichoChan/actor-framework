@@ -55,7 +55,7 @@ public:
   struct worker_deleter {
     worker_deleter(topo_ptr& t) 
       : topo(t)
-    { };
+    { }
     void operator()(void * p) {
       hwloc_free(topo.get(), p, sizeof(Worker));
     }
@@ -118,7 +118,7 @@ public:
                               current_node_set.get());
       CALL_CAF_CRITICAL(hwloc_bitmap_iszero(current_node_set.get()),
                         "Current NUMA node_set is unknown");
-      node_id_t current_node_id = hwloc_bitmap_first(current_node_set.get());
+      auto current_node_id = hwloc_bitmap_first(current_node_set.get());
       std::map<float, pu_set_t> dist_map;
       worker_matrix_t result_matrix;
       // Distance matrix of NUMA nodes.
@@ -136,15 +136,17 @@ public:
         allowed_pus.reset(hwloc_bitmap_dup(allowed_const_pus));
         dist_map.insert(std::make_pair(1.0, std::move(allowed_pus)));  
       } else {
-        node_id_t num_of_dist_objs = distance_matrix->nbobjs;
+        auto num_of_dist_objs = distance_matrix->nbobjs;
         // relvant line for the current NUMA node in distance matrix
         float* dist_pointer =
-          &distance_matrix->latency[num_of_dist_objs * current_node_id];
+          &distance_matrix
+             ->latency[num_of_dist_objs
+                       * static_cast<unsigned int>(current_node_id)];
         // iterate over all NUMA nodes and classify them in distance levels
         // regarding to the current NUMA node
-        for (node_id_t x = 0; x < num_of_dist_objs; ++x) {
+        for (node_id_t x = 0; static_cast<unsigned int>(x) < num_of_dist_objs; ++x) {
           node_set_t tmp_node_set = hwloc_bitmap_make_wrapper();
-          hwloc_bitmap_set(tmp_node_set.get(), x);
+          hwloc_bitmap_set(tmp_node_set.get(), static_cast<unsigned int>(x));
           auto tmp_pu_set = hwloc_bitmap_make_wrapper();
           hwloc_cpuset_from_nodeset(topo.get(), tmp_pu_set.get(),
                                     tmp_node_set.get());
@@ -198,7 +200,8 @@ public:
     auto& cdata = d(self);
     auto& topo = cdata.topo;
     auto allowed_pus = hwloc_topology_get_allowed_cpuset(topo.get());
-    size_t num_allowed_pus = hwloc_bitmap_weight(allowed_pus);
+    size_t num_allowed_pus =
+      static_cast<size_t>(hwloc_bitmap_weight(allowed_pus));
     CALL_CAF_CRITICAL(num_allowed_pus < num_workers,
                       "less PUs than worker");
     cdata.workers.reserve(num_allowed_pus);
@@ -207,13 +210,13 @@ public:
     auto pu_id = hwloc_bitmap_first(allowed_pus);
     size_t worker_count = 0;
     while (pu_id != -1 && worker_count < num_workers) {
-      hwloc_bitmap_only(pu_set.get(), pu_id);
+      hwloc_bitmap_only(pu_set.get(), static_cast<unsigned int>(pu_id));
       hwloc_cpuset_to_nodeset(topo.get(), pu_set.get(), node_set.get());
       auto ptr =
         hwloc_alloc_membind_nodeset(topo.get(), sizeof(Worker), node_set.get(),
                                     HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
       std::unique_ptr<Worker, worker_deleter<Worker>> worker(
-        new (ptr) Worker(pu_id, self, throughput),
+        new (ptr) Worker(static_cast<unsigned int>(pu_id), self, throughput),
         worker_deleter<Worker>(topo));
       cdata.worker_id_map.insert(std::make_pair(pu_id, worker.get()));
       cdata.workers.emplace_back(std::move(worker));
@@ -228,7 +231,7 @@ public:
     auto& wdata = d(self);
     auto& cdata = d(self->parent());
     auto pu_set = hwloc_bitmap_make_wrapper();
-    hwloc_bitmap_set(pu_set.get(), self->id());
+    hwloc_bitmap_set(pu_set.get(), static_cast<unsigned int>(self->id()));
     auto res = hwloc_set_cpubind(cdata.topo.get(), pu_set.get(),
                           HWLOC_CPUBIND_THREAD | HWLOC_CPUBIND_NOMEMBIND);
     CALL_CAF_CRITICAL(res == -1, "hwloc_set_cpubind() failed");
@@ -241,7 +244,7 @@ public:
     //auto p = self->parent();
     auto& wdata = d(self);
     auto& cdata = d(self->parent());
-    pu_id_t num_workers = cdata.workers.size();
+    size_t num_workers = cdata.workers.size();
     if (num_workers < 2) {
       // you can't steal from yourself, can you?
       return nullptr;
