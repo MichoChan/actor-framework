@@ -105,7 +105,8 @@ public:
     using worker_matrix_t = std::vector<std::vector<Worker*>>;
 
     explicit worker_data(scheduler::abstract_coordinator* p)
-        :  strategies(get_poll_strategies(p)) {
+        : rengine(std::random_device{}())
+        , strategies(get_poll_strategies(p)) {
       // nop
     }
 
@@ -184,13 +185,25 @@ public:
           result_matrix.emplace_back(std::move(current_lvl));
         }
       }
+      //accumulate scheduler_lvls - each lvl contains all lower lvls
+      auto last_lvl_it = result_matrix.begin();
+      for (auto current_lvl_it = result_matrix.begin();
+           current_lvl_it != result_matrix.end(); ++current_lvl_it) {
+        if (current_lvl_it != result_matrix.begin()) {
+          std::copy(last_lvl_it->begin(), last_lvl_it->end(), std::back_inserter(*current_lvl_it)) ;
+          ++last_lvl_it;
+        }
+      } 
       return result_matrix;
     }
     // This queue is exposed to other workers that may attempt to steal jobs
     // from it and the central scheduling unit can push new jobs to the queue.
     queue_type queue;
     worker_matrix_t worker_matrix;
+    std::default_random_engine rengine;
+    std::uniform_int_distribution<size_t> uniform;
     std::vector<poll_strategy> strategies;
+
   };
 
   /// Create x workers.
@@ -240,7 +253,7 @@ public:
 
   template <class Worker>
   resumable* try_steal(Worker* self, size_t& scheduler_lvl_idx,
-                       size_t& worker_idx) {
+                       size_t& steal_cnt) {
     //auto p = self->parent();
     auto& wdata = d(self);
     auto& cdata = d(self->parent());
@@ -250,22 +263,20 @@ public:
       return nullptr;
     }
     auto& wmatrix = wdata.worker_matrix;
-    // iterate over each distance level
-    while(scheduler_lvl_idx < wmatrix.size()) {
-      auto& scheduler_lvl = wmatrix[scheduler_lvl_idx];
-      auto res = scheduler_lvl[worker_idx]->data().queue.take_tail();
-      ++worker_idx;
-      if (worker_idx >= scheduler_lvl.size()) {
-        ++scheduler_lvl_idx;
-        worker_idx = 0;
+    auto& scheduler_lvl = wmatrix[scheduler_lvl_idx];
+    auto res =
+      scheduler_lvl[wdata.uniform(wdata.rengine) % scheduler_lvl.size()]
+        ->data()
+        .queue.take_tail();
+    ++steal_cnt;
+    if (steal_cnt >= scheduler_lvl.size()) {
+      steal_cnt = 0; 
+      ++scheduler_lvl_idx;
+      if (scheduler_lvl_idx >= wmatrix.size()) {
+        scheduler_lvl_idx = wmatrix.size() -1;
       }
-      return res;
     }
-    // tried to steal from all workes with no success
-    // but never resign and start again from the beginning
-    scheduler_lvl_idx = 0;
-    worker_idx = 0;
-    return nullptr;
+    return res;
   }
 
   template <class Worker>
@@ -278,7 +289,7 @@ public:
     // downside of "busy waiting", which still performs much better than a
     // "signalizing" implementation based on mutexes and conition variables
     size_t scheduler_lvl_idx = 0;
-    size_t worker_idx= 0;
+    size_t steal_cnt = 0;
     auto& strategies = d(self).strategies;
     resumable* job = nullptr;
     for (auto& strat : strategies) {
@@ -288,7 +299,7 @@ public:
           return job;
         // try to steal every X poll attempts
         if ((i % strat.steal_interval) == 0) {
-          job = try_steal(self, scheduler_lvl_idx, worker_idx);
+          job = try_steal(self, scheduler_lvl_idx, steal_cnt);
           if (job)
             return job;
         }
